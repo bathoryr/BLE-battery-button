@@ -1,17 +1,21 @@
 #include <bluefruit.h>
 
-#define BUTTON_PIN D2
+#define BUTTON_1_PIN D1
+#define BUTTON_2_PIN D2
 #define VBAT_ENABLE_PIN VBAT_ENABLE // (P0_14) Controls the onboard battery voltage divider
 #define QSPI_CS_PIN PIN_QSPI_CS     // (P0_25) Onboard QSPI Flash Chip Select
 #define QSPI_SCK_PIN PIN_QSPI_SCK
 #define QSPI_IO0_PIN PIN_QSPI_IO0
+
+uint8_t activeButtonPin = BUTTON_1_PIN;
 
 const uint32_t CLICK_WINDOW_MS = 400;
 const uint32_t BUTTON_DEBOUNCE_MS = 25;
 const uint32_t LONG_PRESS_MS = 800;
 
 // Forward declarations
-void sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent);
+bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId);
+bool setButtonBleIdentity(uint8_t buttonId);
 uint8_t readBatteryPercentage();
 uint8_t readButtonEvent();
 bool waitForButtonRelease(uint32_t pressStartedAt);
@@ -19,12 +23,32 @@ void putFlashToSleep();
 void goToDeepSleep();
 
 void setup() {
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  uint32_t resetReason = readResetReason();
+  uint32_t buttonLatch = NRF_P0->LATCH;
 
-  // System OFF wake resets the chip, so the button may already be released.
-  bool wokeFromSystemOff =
-      (readResetReason() & POWER_RESETREAS_OFF_Msk) != 0;
-  if (!wokeFromSystemOff && digitalRead(BUTTON_PIN) != LOW) {
+  pinMode(BUTTON_1_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_2_PIN, INPUT_PULLUP);
+
+  uint32_t button1Mask = 1UL << g_ADigitalPinMap[BUTTON_1_PIN];
+  uint32_t button2Mask = 1UL << g_ADigitalPinMap[BUTTON_2_PIN];
+  uint8_t buttonId = 0;
+  bool wokeFromSystemOff = (resetReason & POWER_RESETREAS_OFF_Msk) != 0;
+
+  if (wokeFromSystemOff && (buttonLatch & button1Mask)) {
+    activeButtonPin = BUTTON_1_PIN;
+    buttonId = 1;
+  } else if (wokeFromSystemOff && (buttonLatch & button2Mask)) {
+    activeButtonPin = BUTTON_2_PIN;
+    buttonId = 2;
+  } else if (digitalRead(BUTTON_1_PIN) == LOW) {
+    activeButtonPin = BUTTON_1_PIN;
+    buttonId = 1;
+  } else if (digitalRead(BUTTON_2_PIN) == LOW) {
+    activeButtonPin = BUTTON_2_PIN;
+    buttonId = 2;
+  }
+
+  if (buttonId == 0) {
     goToDeepSleep();
     return;
   }
@@ -32,7 +56,10 @@ void setup() {
   uint8_t buttonEvent = readButtonEvent();
   uint8_t batteryPercent = readBatteryPercentage();
 
-  sendBTHomePacket(batteryPercent, buttonEvent);
+  if (!sendBTHomePacket(batteryPercent, buttonEvent, buttonId)) {
+    goToDeepSleep();
+    return;
+  }
   goToDeepSleep();
 }
 
@@ -40,11 +67,14 @@ void loop() {
   // Never reached because System OFF resets the chip upon wake-up
 }
 
-void sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent) {
+bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId) {
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
   Bluefruit.setTxPower(4); // Max TX power (+4 dBm) for reliable range
-  Bluefruit.setName("Doorbell-Btn");
+  if (!setButtonBleIdentity(buttonId)) {
+    return false;
+  }
+  Bluefruit.setName(buttonId == 1 ? "Doorbell-D1" : "Doorbell-D2");
 
   // Build BTHome v2 Service Data Payload (UUID 0xFCD2)
   // Objects must be ordered from lowest Object ID to highest (0x01 then 0x3A)
@@ -67,6 +97,15 @@ void sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent) {
   Bluefruit.Advertising.start(0);
   delay(1500);
   Bluefruit.Advertising.stop();
+  return true;
+}
+
+bool setButtonBleIdentity(uint8_t buttonId) {
+  ble_gap_addr_t address = Bluefruit.getAddr();
+  address.addr_type = BLE_GAP_ADDR_TYPE_RANDOM_STATIC;
+  address.addr[5] = (address.addr[5] & 0x3F) | 0xC0;
+  address.addr[0] = (address.addr[0] & 0xFC) | buttonId;
+  return Bluefruit.setAddr(&address);
 }
 
 uint8_t readButtonEvent() {
@@ -81,10 +120,10 @@ uint8_t readButtonEvent() {
     bool nextClickDetected = false;
 
     while (millis() - waitStarted < CLICK_WINDOW_MS) {
-      if (digitalRead(BUTTON_PIN) == LOW) {
+      if (digitalRead(activeButtonPin) == LOW) {
         uint32_t pressStartedAt = millis();
         delay(BUTTON_DEBOUNCE_MS);
-        if (digitalRead(BUTTON_PIN) == LOW) {
+        if (digitalRead(activeButtonPin) == LOW) {
           ++clickCount;
           waitForButtonRelease(pressStartedAt);
           nextClickDetected = true;
@@ -105,11 +144,11 @@ uint8_t readButtonEvent() {
 
 bool waitForButtonRelease(uint32_t pressStartedAt) {
   while (true) {
-    while (digitalRead(BUTTON_PIN) == LOW) {
+    while (digitalRead(activeButtonPin) == LOW) {
       delay(5);
     }
     delay(BUTTON_DEBOUNCE_MS);
-    if (digitalRead(BUTTON_PIN) == HIGH) {
+    if (digitalRead(activeButtonPin) == HIGH) {
       return millis() - pressStartedAt >= LONG_PRESS_MS;
     }
   }
@@ -167,9 +206,11 @@ void putFlashToSleep() {
 void goToDeepSleep() {
   putFlashToSleep();
 
-  // Map Arduino D2 to nRF52840 GPIO pin and configure wake-up on LOW
-  uint32_t pin = g_ADigitalPinMap[BUTTON_PIN];
-  nrf_gpio_cfg_sense_input(pin, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+  uint32_t button1Pin = g_ADigitalPinMap[BUTTON_1_PIN];
+  uint32_t button2Pin = g_ADigitalPinMap[BUTTON_2_PIN];
+  NRF_P0->LATCH = (1UL << button1Pin) | (1UL << button2Pin);
+  nrf_gpio_cfg_sense_input(button1Pin, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+  nrf_gpio_cfg_sense_input(button2Pin, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
 
   delay(50);
 
