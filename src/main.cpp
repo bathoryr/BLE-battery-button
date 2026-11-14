@@ -124,8 +124,10 @@ uint8_t readButtonEvent() {
         uint32_t pressStartedAt = millis();
         delay(BUTTON_DEBOUNCE_MS);
         if (digitalRead(activeButtonPin) == LOW) {
+          if (waitForButtonRelease(pressStartedAt)) {
+            return 0x04; // BTHome long press
+          }
           ++clickCount;
-          waitForButtonRelease(pressStartedAt);
           nextClickDetected = true;
           break;
         }
