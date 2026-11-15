@@ -2,6 +2,8 @@
 
 #define BUTTON_1_PIN D1
 #define BUTTON_2_PIN D2
+#define BUTTON_1_NAME "Button-D1"
+#define BUTTON_2_NAME "Button-D2"
 #define VBAT_ENABLE_PIN VBAT_ENABLE // (P0_14) Controls the onboard battery voltage divider
 #define QSPI_CS_PIN PIN_QSPI_CS     // (P0_25) Onboard QSPI Flash Chip Select
 #define QSPI_SCK_PIN PIN_QSPI_SCK
@@ -74,7 +76,7 @@ bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId)
   if (!setButtonBleIdentity(buttonId)) {
     return false;
   }
-  Bluefruit.setName(buttonId == 1 ? "Doorbell-D1" : "Doorbell-D2");
+  Bluefruit.setName(buttonId == 1 ? BUTTON_1_NAME : BUTTON_2_NAME);
 
   // Build BTHome v2 Service Data Payload (UUID 0xFCD2)
   // Objects must be ordered from lowest Object ID to highest (0x01 then 0x3A)

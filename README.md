@@ -1,15 +1,13 @@
-# Battery-Powered BTHome Doorbell Buttons
+# Battery-Powered XIAO nRF52840 BTHome Buttons
 
-Firmware for a Seeed Studio XIAO nRF52840 that acts as a low-power, two-button
-BLE doorbell. Each button advertises a BTHome v2 event that Home Assistant can
-receive through its Bluetooth integration.
+Firmware for a Seeed Studio XIAO nRF52840 that acts as a low-power, two-button. Each button advertises a BTHome v2 event that Home Assistant can receive through its Bluetooth integration.
 
 ## Features
 
 - Two independent inputs on D1 and D2, using internal pull-ups.
 - Separate BLE identities for the two buttons:
-  - D1: `Doorbell-D1`
-  - D2: `Doorbell-D2`
+  - D1: `Button-D1`
+  - D2: `Button-D2`
 - BTHome v2 button events for single, double, triple, and long presses.
 - Battery-percentage measurement using the XIAO battery-voltage input.
 - Returns to nRF52840 System OFF between button events.
@@ -65,7 +63,7 @@ The BTHome v2 Service Data contains:
 - Button event object (`0x3A`)
 
 Advertisements are **not encrypted**. These events are suitable for ordinary
-doorbell automations, not security-critical actions such as unlocking a door.
+button push automations, not security-critical actions such as unlocking a door.
 
 ## Power behavior
 
