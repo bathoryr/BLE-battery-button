@@ -82,7 +82,7 @@ bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId)
   // Objects must be ordered from lowest Object ID to highest (0x01 then 0x3A)
   uint8_t serviceData[] = {
     0xD2, 0xFC,       // BTHome UUID (0xFCD2 in little-endian)
-    0x40,             // Device Info: BTHome v2, unencrypted, regular trigger
+    0x44,             // Device Info: BTHome v2, unencrypted, trigger-based
     0x01, batteryPct, // Object ID 0x01: Battery percentage (uint8, 1% resolution)
     0x3A, buttonEvent  // Object ID 0x3A: Button event (0x01-0x04 = single/double/triple/long)
   };
