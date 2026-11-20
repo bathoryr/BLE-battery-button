@@ -9,6 +9,8 @@ Firmware for a Seeed Studio XIAO nRF52840 that acts as a low-power, two-button. 
   - D1: `Button-D1`
   - D2: `Button-D2`
 - BTHome v2 button events for single, double, triple, and long presses.
+- A persistent per-button BTHome packet ID so repeated identical gestures are
+  reported as distinct events.
 - Battery-percentage measurement using the XIAO battery-voltage input.
 - Returns to nRF52840 System OFF between button events.
 - Sends the onboard QSPI flash a Deep Power-Down command before sleeping.
@@ -58,7 +60,8 @@ allow Home Assistant to discover both names.
 The BTHome v2 Service Data contains:
 
 - UUID `0xFCD2`
-- Device information byte `0x40` (unencrypted BTHome v2)
+- Device information byte `0x44` (unencrypted, trigger-based BTHome v2)
+- Packet ID object (`0x00`), persisted in internal flash for each button
 - Battery percentage object (`0x01`)
 - Button event object (`0x3A`)
 

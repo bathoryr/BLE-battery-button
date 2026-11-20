@@ -1,4 +1,5 @@
 #include <bluefruit.h>
+#include <InternalFileSystem.h>
 
 #define BUTTON_1_PIN D1
 #define BUTTON_2_PIN D2
@@ -16,7 +17,9 @@ const uint32_t BUTTON_DEBOUNCE_MS = 25;
 const uint32_t LONG_PRESS_MS = 800;
 
 // Forward declarations
-bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId);
+bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId,
+                      uint8_t packetId);
+bool nextBTHomePacketId(uint8_t buttonId, uint8_t *packetId);
 bool setButtonBleIdentity(uint8_t buttonId);
 uint8_t readBatteryPercentage();
 uint8_t readButtonEvent();
@@ -35,19 +38,27 @@ void setup() {
   uint32_t button2Mask = 1UL << g_ADigitalPinMap[BUTTON_2_PIN];
   uint8_t buttonId = 0;
   bool wokeFromSystemOff = (resetReason & POWER_RESETREAS_OFF_Msk) != 0;
+  bool button1Pressed = digitalRead(BUTTON_1_PIN) == LOW;
+  bool button2Pressed = digitalRead(BUTTON_2_PIN) == LOW;
 
-  if (wokeFromSystemOff && (buttonLatch & button1Mask)) {
+  if (button1Pressed) {
     activeButtonPin = BUTTON_1_PIN;
     buttonId = 1;
-  } else if (wokeFromSystemOff && (buttonLatch & button2Mask)) {
+  } else if (button2Pressed) {
     activeButtonPin = BUTTON_2_PIN;
     buttonId = 2;
-  } else if (digitalRead(BUTTON_1_PIN) == LOW) {
+  } else if (wokeFromSystemOff && (buttonLatch & button1Mask) &&
+             !(buttonLatch & button2Mask)) {
     activeButtonPin = BUTTON_1_PIN;
     buttonId = 1;
-  } else if (digitalRead(BUTTON_2_PIN) == LOW) {
+  } else if (wokeFromSystemOff && (buttonLatch & button2Mask) &&
+             !(buttonLatch & button1Mask)) {
     activeButtonPin = BUTTON_2_PIN;
     buttonId = 2;
+  } else if (wokeFromSystemOff &&
+             (buttonLatch & (button1Mask | button2Mask))) {
+    activeButtonPin = BUTTON_1_PIN;
+    buttonId = 1;
   }
 
   if (buttonId == 0) {
@@ -57,8 +68,10 @@ void setup() {
 
   uint8_t buttonEvent = readButtonEvent();
   uint8_t batteryPercent = readBatteryPercentage();
+  uint8_t packetId;
 
-  if (!sendBTHomePacket(batteryPercent, buttonEvent, buttonId)) {
+  if (!nextBTHomePacketId(buttonId, &packetId) ||
+      !sendBTHomePacket(batteryPercent, buttonEvent, buttonId, packetId)) {
     goToDeepSleep();
     return;
   }
@@ -69,7 +82,8 @@ void loop() {
   // Never reached because System OFF resets the chip upon wake-up
 }
 
-bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId) {
+bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId,
+                      uint8_t packetId) {
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
   Bluefruit.setTxPower(4); // Max TX power (+4 dBm) for reliable range
@@ -79,10 +93,11 @@ bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId)
   Bluefruit.setName(buttonId == 1 ? BUTTON_1_NAME : BUTTON_2_NAME);
 
   // Build BTHome v2 Service Data Payload (UUID 0xFCD2)
-  // Objects must be ordered from lowest Object ID to highest (0x01 then 0x3A)
+  // Objects must be ordered from lowest Object ID to highest.
   uint8_t serviceData[] = {
     0xD2, 0xFC,       // BTHome UUID (0xFCD2 in little-endian)
     0x44,             // Device Info: BTHome v2, unencrypted, trigger-based
+    0x00, packetId,   // Object ID 0x00: Packet ID (deduplicates repeated advertisements)
     0x01, batteryPct, // Object ID 0x01: Battery percentage (uint8, 1% resolution)
     0x3A, buttonEvent  // Object ID 0x3A: Button event (0x01-0x04 = single/double/triple/long)
   };
@@ -99,6 +114,49 @@ bool sendBTHomePacket(uint8_t batteryPct, uint8_t buttonEvent, uint8_t buttonId)
   Bluefruit.Advertising.start(0);
   delay(1500);
   Bluefruit.Advertising.stop();
+  return true;
+}
+
+bool nextBTHomePacketId(uint8_t buttonId, uint8_t *packetId) {
+  if (buttonId != 1 && buttonId != 2) {
+    return false;
+  }
+  if (!InternalFS.begin()) {
+    return false;
+  }
+
+  const char *path = buttonId == 1 ? "/bthome-d1" : "/bthome-d2";
+  uint8_t nextPacketId = 0;
+  if (InternalFS.exists(path)) {
+    Adafruit_LittleFS_Namespace::File file =
+        InternalFS.open(path, Adafruit_LittleFS_Namespace::FILE_O_READ);
+    if (!file || file.size() != 1) {
+      file.close();
+      return false;
+    }
+
+    int savedPacketId = file.read();
+    file.close();
+    if (savedPacketId < 0) {
+      return false;
+    }
+
+    *packetId = static_cast<uint8_t>(savedPacketId);
+    nextPacketId = static_cast<uint8_t>(*packetId + 1);
+  } else {
+    *packetId = 0;
+    nextPacketId = 1;
+  }
+
+  Adafruit_LittleFS_Namespace::File file =
+      InternalFS.open(path, Adafruit_LittleFS_Namespace::FILE_O_WRITE);
+  if (!file || !file.seek(0) || !file.truncate(0) || file.write(nextPacketId) != 1) {
+    file.close();
+    return false;
+  }
+
+  file.flush();
+  file.close();
   return true;
 }
 
